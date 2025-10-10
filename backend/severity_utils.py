@@ -2,8 +2,10 @@ import os
 import torch
 from transformers import AutoTokenizer, AutoModelForSequenceClassification, pipeline
 
-BASE = os.path.dirname(os.path.abspath(__file__))
-LOCAL_MODEL = os.path.join(BASE, "models", "severity_roberta")
+BASE = "/content/drive/MyDrive/ADE-gUARD"
+
+# Construct full model path
+LOCAL_MODEL = os.path.join(BASE, "severity_roberta")
 
 _classifier = None
 
