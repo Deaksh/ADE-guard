@@ -35,8 +35,8 @@ import logging
 
 logger = logging.getLogger("adeguard")
 
-GOLD_PATH = "/Users/deakshshetty/Documents/ADE-Guard/backend/data/gold_data.json"
-WEAK_PATH = "/Users/deakshshetty/Documents/ADE-Guard/backend/data/weak_labels.json"
+GOLD_PATH = "/content/drive/MyDrive/ADE-gUARD/gold_data.json"
+WEAK_PATH = "/content/drive/MyDrive/ADE-gUARD/weak_labels.json"
 
 # Load data safely
 with open(GOLD_PATH, "r") as f:
@@ -66,8 +66,10 @@ else:
     logger.warning(f"Weak labels not found at {WEAK_PATH}")
 
 # --- Load dataset once at startup ---
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-DATA_PATH = os.path.join(BASE_DIR, "data", "merged_2025.csv")
+BASE_DIR = "/content/drive/MyDrive/ADE-gUARD"
+
+# Construct full dataset path
+DATA_PATH = os.path.join(BASE_DIR,"merged_2025.csv")
 
 if not os.path.exists(DATA_PATH):
     logger.error(f"Dataset not found at: {DATA_PATH}")
