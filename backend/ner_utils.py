@@ -1,7 +1,7 @@
 from transformers import pipeline
 
 # Load once at module level for performance
-MODEL_PATH = "/Users/deakshshetty/Documents/ADE-Guard/backend/models/ner_biobert_output/checkpoint-200"
+MODEL_PATH = "/content/drive/MyDrive/ADE-gUARD/ner_biobert_output/checkpoint-200"
 ner_pipeline = pipeline("ner", model=MODEL_PATH, tokenizer=MODEL_PATH, aggregation_strategy="simple")
 
 def extract_entities(text: str):
