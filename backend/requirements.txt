@@ -1,0 +1,15 @@
+transformers
+datasets
+torch
+sentence-transformers
+hdbscan
+umap-learn
+streamlit
+scikit-learn
+snorkel
+label-studio-sdk
+spacy
+scispacy
+shap
+lime
+pandas
