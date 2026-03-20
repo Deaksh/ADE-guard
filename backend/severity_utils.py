@@ -2,12 +2,11 @@ import os
 import torch
 from transformers import AutoTokenizer, AutoModelForSequenceClassification, pipeline
 
-BASE = "/content/drive/MyDrive/ADE-gUARD"
-
-# Construct full model path
-LOCAL_MODEL = os.path.join(BASE, "severity_roberta")
+BASE = os.path.dirname(os.path.abspath(__file__))
+LOCAL_MODEL = os.path.join(BASE, "models", "severity_biobert")
 
 _classifier = None
+
 
 def load_classifier():
     global _classifier
@@ -23,17 +22,18 @@ def load_classifier():
         _classifier = None
     return _classifier
 
+
 def classify_severity_local(text: str):
     clf = load_classifier()
     if clf is None:
         print("Classifier not loaded.")
         return None
     out = clf(text, top_k=None)
-    print("All class scores:", out)
     best_pred = max(out, key=lambda x: x['score'])
     label = best_pred['label']
     score = best_pred['score']
     return label, score
+
 
 if __name__ == "__main__":
     text = "The patient has severe pain."

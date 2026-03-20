@@ -1,5 +1,3 @@
-# backend/train_severity.py
-
 import json
 import os
 from pathlib import Path
@@ -8,12 +6,15 @@ from transformers import AutoTokenizer, AutoModelForSequenceClassification, Trai
 import numpy as np
 
 BASE = Path(__file__).resolve().parent
-WEAK_PATH = BASE / "data" / "weak_labels.json"
-MODEL_NAME = "roberta-base"
-OUT_DIR = BASE / "models" / "severity_roberta"
+
+COVID_ONLY = os.environ.get("COVID_ONLY", "0") == "1"
+WEAK_PATH = BASE / "data" / ("weak_labels_covid.json" if COVID_ONLY else "weak_labels.json")
+
+# Use BioBERT for compliance, fallback to env override
+MODEL_NAME = os.environ.get("SEVERITY_MODEL", "dmis-lab/biobert-base-cased-v1.1")
+OUT_DIR = BASE / "models" / "severity_biobert"
 os.makedirs(OUT_DIR, exist_ok=True)
 
-# Load raw data
 with open(WEAK_PATH, "r", encoding="utf-8") as f:
     weak = json.load(f)
 
@@ -36,7 +37,6 @@ ds = Dataset.from_list(rows)
 tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
 
 def tokenize_fn(examples):
-    # Reduced max_length from 256 to 128 for faster training
     return tokenizer(examples["text"], truncation=True, padding="max_length", max_length=128)
 
 ds = ds.map(tokenize_fn, batched=True)
@@ -56,19 +56,19 @@ model = AutoModelForSequenceClassification.from_pretrained(
     MODEL_NAME,
     num_labels=len(labels),
     id2label=id2label,
-    label2id=label2id
+    label2id=label2id,
 )
 
 training_args = TrainingArguments(
     output_dir=str(OUT_DIR),
     eval_strategy="epoch",
     save_strategy="epoch",
-    num_train_epochs=2,  # Reduced epochs from 3 to 2
-    per_device_train_batch_size=4,  # Reduced batch size from 8 to 4
-    per_device_eval_batch_size=8,   # Reduced eval batch size from 16 to 8
+    num_train_epochs=2,
+    per_device_train_batch_size=4,
+    per_device_eval_batch_size=8,
     logging_dir=str(BASE / "logs_severity"),
     load_best_model_at_end=True,
-    fp16=True,  # Enable mixed precision if supported on Mac MPS
+    fp16=False,
 )
 
 def compute_metrics(eval_pred):

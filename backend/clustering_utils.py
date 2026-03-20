@@ -1,110 +1,178 @@
+import os
+import re
+from collections import Counter, defaultdict
+from typing import Dict, List, Tuple
+
+import numpy as np
 import pandas as pd
-from transformers import AutoTokenizer, AutoModel
-import torch
-from sklearn.cluster import KMeans
-from .ner_utils import extract_entities  # make sure import matches your project structure
-import warnings
-from transformers import logging
+import hdbscan
+import umap
+from sentence_transformers import SentenceTransformer
 
-warnings.filterwarnings("ignore", message="Asking to truncate to max_length but no maximum length is provided")
-logging.set_verbosity_error()
+from .ner_utils import extract_entities
 
-# Load tokenizer and model once globally
-MODEL_NAME = "dmis-lab/biobert-base-cased-v1.1"
-tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
-tokenizer.model_max_length = 512
-tokenizer._max_len_single_sentence = 512
-tokenizer._max_len_sentences_pair = 512
+MODEL_NAME = os.environ.get("SBERT_MODEL", "sentence-transformers/all-MiniLM-L6-v2")
+EMBEDDER = SentenceTransformer(MODEL_NAME)
 
-model = AutoModel.from_pretrained(MODEL_NAME)
-model.eval()
+ADE_LABELS = {"ADE", "ADR", "ADVERSE_EVENT"}
 
-def get_age_group(age):
+MODIFIER_RULES = [
+    ("Severe", ["severe", "life-threatening", "critical", "fatal", "death", "anaphylaxis"]),
+    ("Moderate", ["moderate", "significant", "persistent", "prolonged"]),
+    ("Mild", ["mild", "minor", "slight", "low-grade"]),
+]
+
+WINDOW_CHARS = 60
+
+
+def get_age_group(age) -> str:
     if age is None or pd.isna(age):
         return "Unknown"
     try:
         age = float(age)
-    except:
+    except Exception:
         return "Unknown"
     if age <= 17:
         return "0-17"
-    elif age <= 30:
+    if age <= 30:
         return "18-30"
-    elif age <= 50:
+    if age <= 50:
         return "31-50"
-    else:
-        return "51+"
+    return "51+"
 
-def detect_modifier(text: str):
-    text_lower = text.lower()
-    if "severe" in text_lower:
-        return "Severe"
-    elif "moderate" in text_lower:
-        return "Moderate"
-    elif "mild" in text_lower:
-        return "Mild"
-    else:
+
+def detect_modifier(text: str, start: int, end: int) -> str:
+    if not text:
         return "Unknown"
+    lo = max(0, start - WINDOW_CHARS)
+    hi = min(len(text), end + WINDOW_CHARS)
+    context = text[lo:hi].lower()
+    for label, keys in MODIFIER_RULES:
+        if any(k in context for k in keys):
+            return label
+    return "Unknown"
 
-def embed_texts(texts):
-    encoded = tokenizer(
-        texts,
-        padding='max_length',
-        truncation='longest_first',
-        max_length=512,
-        return_tensors="pt"
-    )
-    with torch.no_grad():
-        outputs = model(**encoded)
-    embeddings = outputs.last_hidden_state[:, 0, :].cpu().numpy()  # CLS embeddings
-    return embeddings
 
-def cluster_ades(df: pd.DataFrame, max_clusters=50):
-    if "AGE_YRS" not in df.columns:
-        df["AGE_YRS"] = pd.NA
-    df["AGE_GROUP"] = df["AGE_YRS"].apply(get_age_group)
+def _extract_ade_mentions(text: str) -> List[Dict[str, object]]:
+    mentions = []
+    for ent in extract_entities(text):
+        label_base = ent["label"].upper().replace("B-", "").replace("I-", "")
+        if label_base in ADE_LABELS:
+            mentions.append(ent)
+    return mentions
 
-    texts = []
-    meta = []
+
+def _build_records(df: pd.DataFrame, max_records: int) -> List[Dict[str, object]]:
+    records = []
     for _, row in df.iterrows():
         text = str(row.get("SYMPTOM_TEXT", "")).strip()
         if not text:
             continue
-        texts.append(text)
-        age_group = row["AGE_GROUP"]
-        modifier = detect_modifier(text)
-        meta.append((age_group, modifier))
-
-    if not texts:
-        return []
-
-    embeddings = embed_texts(texts)
-
-    n_clusters = min(max_clusters, len(embeddings))
-    if n_clusters == 0:
-        return []
-
-    kmeans = KMeans(n_clusters=n_clusters, random_state=42)
-    labels = kmeans.fit_predict(embeddings)
-
-    clusters = {}
-    for idx, label in enumerate(labels):
-        age_group, modifier = meta[idx]
-        entities = extract_entities(texts[idx])
-        ade_symptoms = {e["text"].lower() for e in entities if e["label"].upper() in ["ADE", "DRUG"]}
-
-        if label not in clusters:
-            clusters[label] = {
-                "cluster_id": label + 1,
+        age_group = get_age_group(row.get("AGE_YRS"))
+        mentions = _extract_ade_mentions(text)
+        for ent in mentions:
+            modifier = detect_modifier(text, ent["start"], ent["end"])
+            records.append({
+                "ade": ent["text"],
                 "age_group": age_group,
                 "modifier": modifier,
-                "symptoms": ade_symptoms.copy()
-            }
-        else:
-            clusters[label]["symptoms"].update(ade_symptoms)
+                "text": text,
+            })
+            if len(records) >= max_records:
+                return records
+    return records
 
-    # Convert symptom sets to lists for serialization
-    for c in clusters.values():
-        c["symptoms"] = list(c["symptoms"])
 
-    return [clusters[k] for k in sorted(clusters.keys())[:max_clusters]]
+def _cluster_group(records: List[Dict[str, object]], min_cluster_size: int) -> Tuple[List[Dict[str, object]], List[Dict[str, object]]]:
+    texts = [f"{r['modifier']} {r['ade']}".strip() for r in records]
+    if not texts:
+        return [], []
+
+    embeddings = EMBEDDER.encode(
+        texts,
+        show_progress_bar=False,
+        normalize_embeddings=True,
+        batch_size=32,
+    )
+
+    if len(texts) < max(2, min_cluster_size):
+        labels = np.full(len(texts), -1)
+    else:
+        clusterer = hdbscan.HDBSCAN(min_cluster_size=min_cluster_size, metric="euclidean")
+        labels = clusterer.fit_predict(embeddings)
+
+    reducer = umap.UMAP(n_components=2, random_state=42)
+    emb2 = reducer.fit_transform(embeddings)
+
+    clusters = defaultdict(list)
+    points = []
+    for idx, label in enumerate(labels):
+        rec = records[idx]
+        clusters[label].append(rec)
+        points.append({
+            "x": float(emb2[idx, 0]),
+            "y": float(emb2[idx, 1]),
+            "cluster": int(label),
+            "age_group": rec["age_group"],
+            "modifier": rec["modifier"],
+            "ade": rec["ade"],
+        })
+
+    cluster_summaries = []
+    for label, recs in clusters.items():
+        ade_counts = Counter([r["ade"].lower() for r in recs])
+        mod_counts = Counter([r["modifier"] for r in recs])
+        top_ades = [a for a, _ in ade_counts.most_common(8)]
+        top_mod = mod_counts.most_common(1)[0][0] if mod_counts else "Unknown"
+        age_group = recs[0]["age_group"] if recs else "Unknown"
+        examples = []
+        seen = set()
+        for r in recs:
+            txt = r.get("text", "").strip()
+            if not txt or txt in seen:
+                continue
+            seen.add(txt)
+            examples.append(txt[:160])
+            if len(examples) >= 2:
+                break
+        cluster_summaries.append({
+            "cluster_id": int(label),
+            "age_group": age_group,
+            "modifier": top_mod,
+            "symptoms": top_ades,
+            "count": len(recs),
+            "modifier_counts": dict(mod_counts),
+            "top_examples": examples,
+        })
+
+    return cluster_summaries, points
+
+
+def cluster_ades(df: pd.DataFrame, max_records: int = 2000, min_cluster_size: int = 15) -> Dict[str, object]:
+    if "AGE_YRS" not in df.columns:
+        df = df.copy()
+        df["AGE_YRS"] = pd.NA
+
+    records = _build_records(df, max_records=max_records)
+    if not records:
+        return {"clusters": [], "points": []}
+
+    grouped = defaultdict(list)
+    for rec in records:
+        grouped[rec["age_group"]].append(rec)
+
+    all_clusters = []
+    all_points = []
+    for age_group, recs in grouped.items():
+        clusters, points = _cluster_group(recs, min_cluster_size=min_cluster_size)
+        for c in clusters:
+            c["age_group"] = age_group
+        for p in points:
+            p["age_group"] = age_group
+        all_clusters.extend(clusters)
+        all_points.extend(points)
+
+    # Sort clusters by size (desc), keep noise (-1) last
+    all_clusters.sort(key=lambda c: (c["cluster_id"] == -1, -c["count"]))
+
+    return {"clusters": all_clusters, "points": all_points}

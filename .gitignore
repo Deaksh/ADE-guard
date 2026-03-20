@@ -1,3 +1,26 @@
-.env
-models/
-*.csv
+.DS_Store
+.idea/
+.venv/
+__pycache__/
+*.pyc
+
+# Node
+frontend/node_modules/
+frontend/.next/
+frontend/out/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Python venv cache
+.pytest_cache/
+
+# Local inputs
+Input_files/
+
+# Secrets
+backend/.env
+
+# Local data artifacts (keep if you want to version them)
+backend/data/merged_*.csv

@@ -1,0 +1,35 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: light;
+}
+
+body {
+  @apply bg-sand text-ink font-body;
+}
+
+.surface {
+  background: radial-gradient(circle at top, #f3fbff 0%, #f5efe6 55%, #f2e6d9 100%);
+}
+
+.card {
+  @apply bg-white/80 backdrop-blur border border-white/60 rounded-3xl shadow-soft;
+}
+
+.badge {
+  @apply inline-flex items-center px-2.5 py-1 text-xs font-semibold rounded-full;
+}
+
+.highlight-ade {
+  @apply bg-coral/20 text-ink px-1 rounded-md;
+}
+
+.highlight-drug {
+  @apply bg-mint/25 text-ink px-1 rounded-md;
+}
+
+.highlight-age {
+  @apply bg-sky/70 text-ink px-1 rounded-md;
+}

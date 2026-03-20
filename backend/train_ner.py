@@ -22,11 +22,16 @@ from transformers import (
 import torch
 
 BASE = Path(__file__).resolve().parent
-GOLD_PATH = BASE / "data" / "gold_data.json"
+COVID_ONLY = os.environ.get("COVID_ONLY", "0") == "1"
+GOLD_PATH = BASE / "data" / ("gold_data_covid.json" if COVID_ONLY else "gold_data.json")
 MODEL_NAME = "dmis-lab/biobert-base-cased-v1.1"
 OUT_DIR = BASE / "models" / "ner_biobert"
 os.makedirs(OUT_DIR, exist_ok=True)
 MAX_LEN = 512
+
+# Optional: restrict labels for evaluation alignment (e.g., "ADE,DRUG")
+LABEL_FILTER = os.environ.get("NER_LABELS", "")
+ALLOWED_LABELS = {l.strip().upper() for l in LABEL_FILTER.split(",") if l.strip()} if LABEL_FILTER else None
 
 # Load gold data
 with open(GOLD_PATH, "r", encoding="utf-8") as f:
@@ -55,6 +60,8 @@ def token_label_mapping(text, entities):
             continue
         for ent in entities:
             s, e, lab = ent["start"], ent["end"], ent["label"]
+            if ALLOWED_LABELS and str(lab).upper() not in ALLOWED_LABELS:
+                continue
             if start >= e or end <= s:
                 continue
             label = "B-" + lab if start == s else "I-" + lab
