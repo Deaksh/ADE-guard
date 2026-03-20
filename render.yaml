@@ -1,0 +1,14 @@
+services:
+  - type: web
+    name: adeguard-api
+    runtime: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn backend.app:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.9
+      - key: COVID_ONLY
+        value: "1"
+      - key: SHAP_USE_TOKENIZER
+        value: "0"
