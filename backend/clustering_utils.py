@@ -7,7 +7,6 @@ import numpy as np
 import pandas as pd
 import hdbscan
 import umap
-from sentence_transformers import SentenceTransformer
 
 from .ner_utils import extract_entities
 
@@ -18,6 +17,7 @@ _EMBEDDER = None
 def _get_embedder():
     global _EMBEDDER
     if _EMBEDDER is None:
+        from sentence_transformers import SentenceTransformer
         _EMBEDDER = SentenceTransformer(MODEL_NAME)
     return _EMBEDDER
 

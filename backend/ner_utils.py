@@ -2,7 +2,6 @@ import os
 from functools import lru_cache
 from typing import List, Dict, Any
 import requests
-from transformers import pipeline
 from dotenv import load_dotenv
 
 # Load once at module level for performance
@@ -45,6 +44,7 @@ MODEL_PATH = _resolve_model_path()
 
 @lru_cache(maxsize=1)
 def _get_pipeline():
+    from transformers import pipeline
     return pipeline(
         "ner",
         model=MODEL_PATH,

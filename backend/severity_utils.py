@@ -1,7 +1,5 @@
 import os
-import torch
 import requests
-from transformers import AutoTokenizer, AutoModelForSequenceClassification, pipeline
 
 BASE = os.path.dirname(os.path.abspath(__file__))
 DEFAULT_LOCAL_MODEL = os.path.join(BASE, "models", "severity_biobert")
@@ -29,6 +27,8 @@ def load_classifier():
     if _classifier is not None:
         return _classifier
     if os.path.exists(MODEL_ID):
+        from transformers import AutoTokenizer, AutoModelForSequenceClassification, pipeline
+        import torch
         tokenizer = AutoTokenizer.from_pretrained(MODEL_ID)
         model = AutoModelForSequenceClassification.from_pretrained(MODEL_ID)
         device = 0 if torch.cuda.is_available() else -1
@@ -36,6 +36,8 @@ def load_classifier():
         print("Loaded labels:", _classifier.model.config.id2label)
     else:
         try:
+            from transformers import AutoTokenizer, AutoModelForSequenceClassification, pipeline
+            import torch
             tokenizer = AutoTokenizer.from_pretrained(MODEL_ID, cache_dir=cache_dir)
             model = AutoModelForSequenceClassification.from_pretrained(MODEL_ID, cache_dir=cache_dir)
             device = 0 if torch.cuda.is_available() else -1
