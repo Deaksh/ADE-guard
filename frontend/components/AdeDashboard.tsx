@@ -37,6 +37,7 @@ export default function AdeDashboard() {
   const [analysis, setAnalysis] = useState<any[]>([]);
   const [explain, setExplain] = useState<any>(null);
   const [clusters, setClusters] = useState<any>(null);
+  const [explainLoading, setExplainLoading] = useState(false);
   const [insights, setInsights] = useState<Insight | null>(null);
   const [loading, setLoading] = useState(false);
 
@@ -45,20 +46,31 @@ export default function AdeDashboard() {
   const handleAnalyze = async () => {
     setLoading(true);
     try {
-      const [nerRes, sevRes, analyzeRes, explainRes, insightsRes] = await Promise.all([
+      const [nerRes, sevRes, analyzeRes, insightsRes] = await Promise.all([
         axios.post(`${API_BASE}/api/v1/ner`, { text }),
         axios.post(`${API_BASE}/api/v1/severity`, { text }),
         axios.post(`${API_BASE}/api/v1/analyze`, { text }),
-        axios.post(`${API_BASE}/api/v1/explain/severity`, { text }),
         axios.get(`${API_BASE}/api/v1/insights`),
       ]);
       setEntities(nerRes.data.entities || []);
       setSeverity(sevRes.data);
       setAnalysis(analyzeRes.data.results || []);
-      setExplain(explainRes.data || null);
+      
       setInsights(insightsRes.data || null);
     } finally {
       setLoading(false);
+    }
+  };
+
+
+
+  const handleExplain = async () => {
+    setExplainLoading(true);
+    try {
+      const res = await axios.post(`${API_BASE}/api/v1/explain/severity`, { text });
+      setExplain(res.data || null);
+    } finally {
+      setExplainLoading(false);
     }
   };
 
@@ -218,7 +230,16 @@ export default function AdeDashboard() {
         </section>
 
         <section className="card p-6 space-y-4">
-          <h2 className="font-display text-xl">Explainability</h2>
+          <div className="flex items-center justify-between">
+            <h2 className="font-display text-xl">Explainability</h2>
+            <button
+              className="px-3 py-1.5 rounded-full bg-ink text-sand text-xs font-semibold"
+              onClick={handleExplain}
+              disabled={explainLoading}
+            >
+              {explainLoading ? "Explaining..." : "Run Explain"}
+            </button>
+          </div>
           <p className="text-sm text-slate">
             LIME and SHAP highlight tokens driving the severity decision.
           </p>
