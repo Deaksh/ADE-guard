@@ -1,9 +1,11 @@
 import os
 from functools import lru_cache
 from transformers import pipeline
+from dotenv import load_dotenv
 
 # Load once at module level for performance
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+load_dotenv(os.path.join(BASE_DIR, ".env"))
 DEFAULT_DIR = os.path.join(BASE_DIR, "models", "ner_biobert_output")
 ENV_PATH = os.environ.get("NER_MODEL_PATH")
 
@@ -18,7 +20,17 @@ def _resolve_model_path() -> str:
         os.path.join(DEFAULT_DIR, "checkpoint-200"),
     ])
     for path in candidates:
-        if path and os.path.exists(path):
+        # If user provided a HF repo id, use it directly
+        if path and not os.path.exists(path) and isinstance(path, str) and "/" in path and not path.startswith("/"):
+            return path
+        if not path or not os.path.exists(path):
+            continue
+        # Ensure a model file exists in the directory
+        has_model = any(
+            os.path.exists(os.path.join(path, fname))
+            for fname in ["pytorch_model.bin", "model.safetensors", "tf_model.h5"]
+        )
+        if has_model:
             return path
     return DEFAULT_DIR
 
@@ -46,10 +58,15 @@ def _extract_entities_cached(text: str):
     truncated_text = ner_pipeline.tokenizer.decode(input_ids, skip_special_tokens=True)
     results = ner_pipeline(truncated_text)
     entities = []
+    stopwords = {"and", "or", "the", "a", "an", "to", "of", "in", "after", "for", "on", "at", "with",
+                 "without", "from", "by", "as", "is", "was", "were", "be", "been", "being"}
     for r in results:
         word = r["word"].replace("##", "") if r["word"].startswith("##") else r["word"]
+        cleaned = word.strip()
+        if len(cleaned) < 3 or cleaned.lower() in stopwords:
+            continue
         entities.append({
-            "text": word,
+            "text": cleaned,
             "label": r["entity_group"],
             "start": r["start"],
             "end": r["end"],

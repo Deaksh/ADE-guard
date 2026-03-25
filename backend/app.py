@@ -1,13 +1,18 @@
 import os
+# Must be set before importing numba/umap/shap to avoid threading layer issues
+os.environ.setdefault("NUMBA_THREADING_LAYER", "workqueue")
+os.environ.setdefault("NUMBA_NUM_THREADS", "1")
+os.environ.setdefault("NUMBA_DISABLE_JIT", "0")
 import re
 import json
 import logging
 from typing import Any, Dict, List
 from functools import lru_cache
+import threading
 
 import pandas as pd
 import numpy as np
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Response
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
@@ -16,11 +21,16 @@ from backend.clustering_utils import cluster_ades
 from backend.data_preparation import load_and_merge_vaers
 from backend.ner_utils import extract_entities
 from backend.severity_utils import load_classifier
+from dotenv import load_dotenv
+from backend.services.insights_service import build_clinical_insights
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("adeguard")
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+load_dotenv(os.path.join(BASE_DIR, ".env"))
+os.environ.setdefault("NUMBA_THREADING_LAYER", "workqueue")
+os.environ.setdefault("NUMBA_NUM_THREADS", "1")
 DATA_DIR = os.path.join(BASE_DIR, "data")
 GOLD_PATH = os.path.join(DATA_DIR, "gold_data.json")
 GOLD_COVID_PATH = os.path.join(DATA_DIR, "gold_data_covid.json")
@@ -29,6 +39,7 @@ MERGED_PATH = os.path.join(DATA_DIR, "merged_2025.csv")
 MERGED_COVID_PATH = os.path.join(DATA_DIR, "merged_covid_2025.csv")
 
 app = FastAPI(title="ADEGuard API")
+CLUSTER_LOCK = threading.Lock()
 
 app.add_middleware(
     CORSMiddleware,
@@ -162,7 +173,22 @@ def _classify_severity_cached(text: str) -> Dict[str, Any]:
     out = SEVERITY_PIPELINE(text, top_k=None)
     best_pred = max(out, key=lambda x: x["score"])
     probs = {r["label"]: float(r["score"]) for r in out}
-    return {"label": best_pred["label"], "confidence": float(best_pred["score"]), "probabilities": probs}
+    label = best_pred["label"]
+    confidence = float(best_pred["score"])
+    # Rule-based overrides for critical signals
+    text_lower = text.lower()
+    severe_markers = [
+        "death", "fatal", "life-threatening", "anaphylaxis", "stroke", "seizure",
+        "myocarditis", "cardiac arrest", "icu", "intensive care", "respiratory failure"
+    ]
+    moderate_markers = ["hospitalized", "er visit", "emergency room", "er ", "syncope", "fainting"]
+    if any(m in text_lower for m in severe_markers):
+        label = "Severe"
+        confidence = max(confidence, 0.95)
+    elif any(m in text_lower for m in moderate_markers) and label == "Mild":
+        label = "Moderate"
+        confidence = max(confidence, 0.7)
+    return {"label": label, "confidence": confidence, "probabilities": probs}
 
 
 def _classify_severity(text: str) -> SeverityResponse:
@@ -352,6 +378,17 @@ def analyze(input: TextInput):
     return {"results": results}
 
 
+
+@app.get("/api/v1/insights")
+def insights():
+    return build_clinical_insights(DF)
+
+@app.get("/api/v1/export")
+def export_reports(limit: int = 500):
+    subset = DF.head(limit).copy()
+    csv_data = subset.to_csv(index=False)
+    return Response(content=csv_data, media_type="text/csv")
+
 @app.get("/api/v1/clusters")
 def clusters(max_records: int = 500, min_cluster_size: int = 15, include_points: int = 1):
     cache_key = (max_records, min_cluster_size)
@@ -361,8 +398,13 @@ def clusters(max_records: int = 500, min_cluster_size: int = 15, include_points:
     if cache_key in cache:
         output = cache[cache_key]
     else:
-        output = cluster_ades(DF, max_records=max_records, min_cluster_size=min_cluster_size)
-        cache[cache_key] = output
+        with CLUSTER_LOCK:
+            # Double-check cache in case another thread filled it
+            if cache_key in cache:
+                output = cache[cache_key]
+            else:
+                output = cluster_ades(DF, max_records=max_records, min_cluster_size=min_cluster_size)
+                cache[cache_key] = output
     if include_points != 1:
         output.pop("points", None)
         return output
@@ -404,6 +446,9 @@ def explain_severity(input: ExplainRequest):
         lime_payload = {"error": str(e)}
 
     try:
+        # Ensure numba doesn't try to spawn extra threads during SHAP
+        os.environ["NUMBA_NUM_THREADS"] = "1"
+        os.environ["NUMBA_THREADING_LAYER"] = "workqueue"
         import shap
 
         use_tokenizer = os.environ.get("SHAP_USE_TOKENIZER", "0") == "1"

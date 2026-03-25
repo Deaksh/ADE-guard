@@ -24,3 +24,7 @@ backend/.env
 
 # Local data artifacts (keep if you want to version them)
 backend/data/merged_*.csv
+backend/data/weak_labels_snorkel*.json
+backend/.hf_cache/
+backend/logs/
+backend/logs_severity/

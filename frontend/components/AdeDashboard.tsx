@@ -2,16 +2,8 @@
 
 import { useMemo, useState } from "react";
 import axios from "axios";
-import {
-  ScatterChart,
-  Scatter,
-  XAxis,
-  YAxis,
-  Tooltip,
-  ResponsiveContainer,
-} from "recharts";
-
-const API_BASE = process.env.NEXT_PUBLIC_API_BASE || "http://localhost:8000";
+import ClusterScatter from "./ClusterScatter";
+const API_BASE = process.env.NEXT_PUBLIC_API_BASE || "http://localhost:8100";
 
 type Entity = {
   text: string;
@@ -29,6 +21,13 @@ type Severity = {
 
 type ExplainFeature = { token: string; weight: number };
 
+type Insight = {
+  top_symptoms?: { symptom: string; count: number }[];
+  severe_signal_count?: number;
+  age_distribution?: { age_band: string; count: number }[];
+  top_vaccines?: { vaccine: string; count: number }[];
+};
+
 export default function AdeDashboard() {
   const [text, setText] = useState(
     "Patient developed severe chest pain and dizziness after the Pfizer COVID-19 vaccine."
@@ -38,6 +37,7 @@ export default function AdeDashboard() {
   const [analysis, setAnalysis] = useState<any[]>([]);
   const [explain, setExplain] = useState<any>(null);
   const [clusters, setClusters] = useState<any>(null);
+  const [insights, setInsights] = useState<Insight | null>(null);
   const [loading, setLoading] = useState(false);
 
   const highlighted = useMemo(() => buildSegments(text, entities), [text, entities]);
@@ -45,16 +45,18 @@ export default function AdeDashboard() {
   const handleAnalyze = async () => {
     setLoading(true);
     try {
-      const [nerRes, sevRes, analyzeRes, explainRes] = await Promise.all([
+      const [nerRes, sevRes, analyzeRes, explainRes, insightsRes] = await Promise.all([
         axios.post(`${API_BASE}/api/v1/ner`, { text }),
         axios.post(`${API_BASE}/api/v1/severity`, { text }),
         axios.post(`${API_BASE}/api/v1/analyze`, { text }),
         axios.post(`${API_BASE}/api/v1/explain/severity`, { text }),
+        axios.get(`${API_BASE}/api/v1/insights`),
       ]);
       setEntities(nerRes.data.entities || []);
       setSeverity(sevRes.data);
       setAnalysis(analyzeRes.data.results || []);
       setExplain(explainRes.data || null);
+      setInsights(insightsRes.data || null);
     } finally {
       setLoading(false);
     }
@@ -65,6 +67,10 @@ export default function AdeDashboard() {
       `${API_BASE}/api/v1/clusters?max_records=500&min_cluster_size=15&include_points=1`
     );
     setClusters(res.data);
+  };
+
+  const handleDownload = () => {
+    window.open(`${API_BASE}/api/v1/export?limit=500`, "_blank");
   };
 
   return (
@@ -177,14 +183,48 @@ export default function AdeDashboard() {
           </div>
 
           <div className="card p-6 space-y-4">
-            <h2 className="font-display text-xl">Explainability</h2>
-            <p className="text-sm text-slate">
-              LIME and SHAP highlight tokens driving the severity decision.
-            </p>
-            <div className="grid gap-4">
-              <ExplainList title="LIME" features={explain?.lime?.features} error={explain?.lime?.error} />
-              <ExplainList title="SHAP" features={explain?.shap?.features} error={explain?.shap?.error} />
+            <div className="flex items-center justify-between">
+              <div>
+                <h2 className="font-display text-xl">Clinical Insights</h2>
+                <p className="text-sm text-slate">Snapshot summaries for safety teams.</p>
+              </div>
+              <button
+                className="px-3 py-1.5 rounded-full bg-sea text-white text-xs font-semibold"
+                onClick={handleDownload}
+              >
+                Download CSV
+              </button>
             </div>
+            {insights ? (
+              <div className="space-y-3 text-sm">
+                <p className="text-xs text-slate">Severe signal count: {insights.severe_signal_count ?? 0}</p>
+                <div>
+                  <p className="text-xs uppercase tracking-widest text-slate/70">Top Symptoms</p>
+                  <p className="text-xs text-slate">{(insights.top_symptoms || []).map(s => `${s.symptom} (${s.count})`).join(", ")}</p>
+                </div>
+                <div>
+                  <p className="text-xs uppercase tracking-widest text-slate/70">Age Bands</p>
+                  <p className="text-xs text-slate">{(insights.age_distribution || []).map(a => `${a.age_band} (${a.count})`).join(", ")}</p>
+                </div>
+                <div>
+                  <p className="text-xs uppercase tracking-widest text-slate/70">Top Vaccines</p>
+                  <p className="text-xs text-slate">{(insights.top_vaccines || []).map(v => `${v.vaccine} (${v.count})`).join(", ")}</p>
+                </div>
+              </div>
+            ) : (
+              <p className="text-sm text-slate">Run analysis to populate insights.</p>
+            )}
+          </div>
+        </section>
+
+        <section className="card p-6 space-y-4">
+          <h2 className="font-display text-xl">Explainability</h2>
+          <p className="text-sm text-slate">
+            LIME and SHAP highlight tokens driving the severity decision.
+          </p>
+          <div className="grid gap-4 md:grid-cols-2">
+            <ExplainList title="LIME" features={explain?.lime?.features} error={explain?.lime?.error} />
+            <ExplainList title="SHAP" features={explain?.shap?.features} error={explain?.shap?.error} />
           </div>
         </section>
 
@@ -206,14 +246,7 @@ export default function AdeDashboard() {
           {clusters ? (
             <div className="grid md:grid-cols-[1.3fr_0.7fr] gap-6">
               <div className="h-72 rounded-2xl border border-slate/10 bg-white p-4">
-                <ResponsiveContainer width="100%" height="100%">
-                  <ScatterChart>
-                    <XAxis type="number" dataKey="x" hide />
-                    <YAxis type="number" dataKey="y" hide />
-                    <Tooltip cursor={{ strokeDasharray: "3 3" }} />
-                    <Scatter data={clusters.points || []} fill="#1d6f8a" />
-                  </ScatterChart>
-                </ResponsiveContainer>
+                <ClusterScatter points={clusters.points || []} />
               </div>
               <div className="space-y-3 text-sm">
                 {(clusters.clusters || []).slice(0, 8).map((c: any, idx: number) => (

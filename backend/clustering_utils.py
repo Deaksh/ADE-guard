@@ -24,6 +24,14 @@ MODIFIER_RULES = [
 
 WINDOW_CHARS = 60
 
+STOPWORDS = {
+    "and", "or", "the", "a", "an", "to", "of", "in", "after", "for", "on", "at", "with",
+    "without", "from", "by", "as", "is", "was", "were", "be", "been", "being", "patient",
+    "pt", "he", "she", "they", "it", "this", "that", "these", "those", "day", "days", "year",
+    "years", "month", "months", "dose", "dose", "vaccine", "vaccination", "shot", "received",
+}
+
+
 
 def get_age_group(age) -> str:
     if age is None or pd.isna(age):
@@ -53,11 +61,25 @@ def detect_modifier(text: str, start: int, end: int) -> str:
     return "Unknown"
 
 
+def _clean_ade(text: str) -> str:
+    t = re.sub(r"[^a-zA-Z0-9\-\s]", "", text.lower()).strip()
+    if not t or len(t) < 3:
+        return ""
+    if t in STOPWORDS:
+        return ""
+    return t
+
+
 def _extract_ade_mentions(text: str) -> List[Dict[str, object]]:
     mentions = []
     for ent in extract_entities(text):
         label_base = ent["label"].upper().replace("B-", "").replace("I-", "")
         if label_base in ADE_LABELS:
+            cleaned = _clean_ade(ent["text"])
+            if not cleaned:
+                continue
+            ent = dict(ent)
+            ent["text"] = cleaned
             mentions.append(ent)
     return mentions
 

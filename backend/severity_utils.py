@@ -3,7 +3,19 @@ import torch
 from transformers import AutoTokenizer, AutoModelForSequenceClassification, pipeline
 
 BASE = os.path.dirname(os.path.abspath(__file__))
-LOCAL_MODEL = os.path.join(BASE, "models", "severity_biobert")
+DEFAULT_LOCAL_MODEL = os.path.join(BASE, "models", "severity_biobert")
+MODEL_ID = os.environ.get("SEVERITY_MODEL") or DEFAULT_LOCAL_MODEL
+
+# Ensure HF cache is writable when pulling from hub
+DEFAULT_CACHE = os.path.join(BASE, ".hf_cache")
+os.environ["HF_HOME"] = os.environ.get("HF_HOME") or DEFAULT_CACHE
+cache_dir = os.environ["HF_HOME"]
+try:
+    os.makedirs(cache_dir, exist_ok=True)
+except OSError:
+    cache_dir = DEFAULT_CACHE
+    os.environ["HF_HOME"] = cache_dir
+    os.makedirs(cache_dir, exist_ok=True)
 
 _classifier = None
 
@@ -12,14 +24,22 @@ def load_classifier():
     global _classifier
     if _classifier is not None:
         return _classifier
-    if os.path.exists(LOCAL_MODEL):
-        tokenizer = AutoTokenizer.from_pretrained(LOCAL_MODEL)
-        model = AutoModelForSequenceClassification.from_pretrained(LOCAL_MODEL)
+    if os.path.exists(MODEL_ID):
+        tokenizer = AutoTokenizer.from_pretrained(MODEL_ID)
+        model = AutoModelForSequenceClassification.from_pretrained(MODEL_ID)
         device = 0 if torch.cuda.is_available() else -1
         _classifier = pipeline("text-classification", model=model, tokenizer=tokenizer, device=device, top_k=None)
         print("Loaded labels:", _classifier.model.config.id2label)
     else:
-        _classifier = None
+        try:
+            tokenizer = AutoTokenizer.from_pretrained(MODEL_ID, cache_dir=cache_dir)
+            model = AutoModelForSequenceClassification.from_pretrained(MODEL_ID, cache_dir=cache_dir)
+            device = 0 if torch.cuda.is_available() else -1
+            _classifier = pipeline("text-classification", model=model, tokenizer=tokenizer, device=device, top_k=None)
+            print("Loaded labels:", _classifier.model.config.id2label)
+        except Exception as e:
+            print(f"Classifier not loaded: {e}")
+            _classifier = None
     return _classifier
 
 

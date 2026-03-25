@@ -4,16 +4,32 @@ from pathlib import Path
 from datasets import Dataset
 from transformers import AutoTokenizer, AutoModelForSequenceClassification, TrainingArguments, Trainer
 import numpy as np
+import torch
 
 BASE = Path(__file__).resolve().parent
 
 COVID_ONLY = os.environ.get("COVID_ONLY", "0") == "1"
-WEAK_PATH = BASE / "data" / ("weak_labels_covid.json" if COVID_ONLY else "weak_labels.json")
+USE_SNORKEL = os.environ.get("USE_SNORKEL", "0") == "1"
 
-# Use BioBERT for compliance, fallback to env override
-MODEL_NAME = os.environ.get("SEVERITY_MODEL", "dmis-lab/biobert-base-cased-v1.1")
+if USE_SNORKEL:
+    WEAK_PATH = BASE / "data" / ("weak_labels_snorkel_covid.json" if COVID_ONLY else "weak_labels_snorkel.json")
+else:
+    WEAK_PATH = BASE / "data" / ("weak_labels_covid.json" if COVID_ONLY else "weak_labels.json")
+
+MODEL_NAME = os.environ.get("SEVERITY_MODEL", "dmis-lab/biobert-base-cased-v1.2")
 OUT_DIR = BASE / "models" / "severity_biobert"
 os.makedirs(OUT_DIR, exist_ok=True)
+
+# Ensure HF cache is writable
+DEFAULT_CACHE = BASE / ".hf_cache"
+os.environ["HF_HOME"] = os.environ.get("HF_HOME") or str(DEFAULT_CACHE)
+cache_dir = os.environ["HF_HOME"]
+try:
+    os.makedirs(cache_dir, exist_ok=True)
+except OSError:
+    cache_dir = str(DEFAULT_CACHE)
+    os.environ["HF_HOME"] = cache_dir
+    os.makedirs(cache_dir, exist_ok=True)
 
 with open(WEAK_PATH, "r", encoding="utf-8") as f:
     weak = json.load(f)
@@ -32,9 +48,20 @@ labels = sorted(list({r["label"] for r in rows}))
 label2id = {l: i for i, l in enumerate(labels)}
 id2label = {i: l for l, i in label2id.items()}
 
+# Compute class weights (inverse frequency)
+label_counts = {l: 0 for l in labels}
+for r in rows:
+    label_counts[r["label"]] += 1
+
+counts = np.array([label_counts[l] for l in labels], dtype=np.float32)
+weights = counts.sum() / (counts + 1e-6)
+weights = weights / weights.mean()
+class_weights = torch.tensor(weights, dtype=torch.float32)
+print("Class weights:", {l: float(w) for l, w in zip(labels, weights)})
+
 ds = Dataset.from_list(rows)
 
-tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
+tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME, cache_dir=cache_dir)
 
 def tokenize_fn(examples):
     return tokenizer(examples["text"], truncation=True, padding="max_length", max_length=128)
@@ -57,12 +84,27 @@ model = AutoModelForSequenceClassification.from_pretrained(
     num_labels=len(labels),
     id2label=id2label,
     label2id=label2id,
+    cache_dir=cache_dir,
 )
+
+# Freeze embeddings + early layers, train only last 4 + classifier
+for param in model.base_model.parameters():
+    param.requires_grad = False
+
+if hasattr(model.base_model, "encoder"):
+    encoder_layers = model.base_model.encoder.layer
+    for layer in encoder_layers[-4:]:
+        for param in layer.parameters():
+            param.requires_grad = True
+
+for param in model.classifier.parameters():
+    param.requires_grad = True
 
 training_args = TrainingArguments(
     output_dir=str(OUT_DIR),
     eval_strategy="epoch",
     save_strategy="epoch",
+    save_total_limit=1,
     num_train_epochs=2,
     per_device_train_batch_size=4,
     per_device_eval_batch_size=8,
@@ -71,6 +113,7 @@ training_args = TrainingArguments(
     fp16=False,
 )
 
+
 def compute_metrics(eval_pred):
     logits, labels_true = eval_pred
     preds = np.argmax(logits, axis=-1)
@@ -78,7 +121,18 @@ def compute_metrics(eval_pred):
     report = classification_report(labels_true, preds, target_names=labels, output_dict=True)
     return {"classification_report": report}
 
-trainer = Trainer(
+
+class WeightedTrainer(Trainer):
+    def compute_loss(self, model, inputs, return_outputs=False):
+        labels_tensor = inputs.get("labels")
+        outputs = model(**inputs)
+        logits = outputs.get("logits")
+        loss_fct = torch.nn.CrossEntropyLoss(weight=class_weights.to(logits.device))
+        loss = loss_fct(logits, labels_tensor)
+        return (loss, outputs) if return_outputs else loss
+
+
+trainer = WeightedTrainer(
     model=model,
     args=training_args,
     train_dataset=train_ds,
