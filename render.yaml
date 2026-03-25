@@ -3,6 +3,7 @@ services:
     name: adeguard-api
     runtime: python
     plan: free
+    healthCheckPath: /healthz
     disk:
       name: hf-cache
       mountPath: /var/data

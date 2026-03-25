@@ -218,6 +218,16 @@ def root():
     return {"message": "ADEGuard API is running"}
 
 
+@app.head("/")
+def root_head():
+    return Response(status_code=200)
+
+
+@app.get("/healthz")
+def healthz():
+    return {"status": "ok"}
+
+
 @app.get("/api/v1")
 def api_root():
     return {
