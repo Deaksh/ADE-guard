@@ -3,6 +3,10 @@ services:
     name: adeguard-api
     runtime: python
     plan: free
+    disk:
+      name: hf-cache
+      mountPath: /var/data
+      sizeGB: 5
     buildCommand: pip install -r requirements.txt
     startCommand: uvicorn backend.app:app --host 0.0.0.0 --port $PORT
     envVars:
@@ -17,4 +21,8 @@ services:
       - key: SEVERITY_MODEL
         value: "Deaksh/ADE-Guard"
       - key: HF_HOME
-        value: "/opt/render/project/src/.hf_cache"
+        value: "/var/data/hf"
+      - key: HUGGINGFACE_HUB_CACHE
+        value: "/var/data/hf/hub"
+      - key: TRANSFORMERS_CACHE
+        value: "/var/data/hf/transformers"
