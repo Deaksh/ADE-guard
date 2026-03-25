@@ -20,7 +20,7 @@ from backend.ade_pipeline import extract_ade_with_severity
 from backend.clustering_utils import cluster_ades
 from backend.data_preparation import load_and_merge_vaers
 from backend.ner_utils import extract_entities
-from backend.severity_utils import load_classifier
+from backend.severity_utils import load_classifier, classify_severity
 from dotenv import load_dotenv
 from backend.services.insights_service import build_clinical_insights
 
@@ -140,25 +140,44 @@ def _extract_symptom_tokens(s: str) -> List[str]:
     return [p.strip() for p in splitter.split(str(s)) if p.strip()]
 
 
-GOLD_DATA = _load_gold_data()
-WEAK_DATA = _load_weak_data()
-DF = _load_dataset()
+@lru_cache(maxsize=1)
+def get_gold_data():
+    return _load_gold_data()
 
-UNIQUE_SYMPTOMS = set()
-for v in DF["ALL_SYMPTOMS"].dropna():
-    for token in _extract_symptom_tokens(v):
-        UNIQUE_SYMPTOMS.add(token)
 
-SEVERITY_PIPELINE = load_classifier()
+@lru_cache(maxsize=1)
+def get_weak_data():
+    return _load_weak_data()
+
+
+@lru_cache(maxsize=1)
+def get_df():
+    return _load_dataset()
+
+
+@lru_cache(maxsize=1)
+def get_unique_symptoms():
+    df = get_df()
+    unique = set()
+    for v in df["ALL_SYMPTOMS"].dropna():
+        for token in _extract_symptom_tokens(v):
+            unique.add(token)
+    return unique
+
+
+@lru_cache(maxsize=1)
+def get_severity_pipeline():
+    return load_classifier()
 
 
 def _predict_proba(texts: List[str]) -> List[List[float]]:
-    if SEVERITY_PIPELINE is None:
+    pipeline = get_severity_pipeline()
+    if pipeline is None:
         return []
-    outputs = SEVERITY_PIPELINE(texts, top_k=None)
+    outputs = pipeline(texts, top_k=None)
     if isinstance(outputs, dict):
         outputs = [outputs]
-    labels = list(SEVERITY_PIPELINE.model.config.id2label.values())
+    labels = list(pipeline.model.config.id2label.values())
     prob_rows = []
     for row in outputs:
         label_map = {r["label"]: float(r["score"]) for r in row}
@@ -168,13 +187,11 @@ def _predict_proba(texts: List[str]) -> List[List[float]]:
 
 @lru_cache(maxsize=2048)
 def _classify_severity_cached(text: str) -> Dict[str, Any]:
-    if SEVERITY_PIPELINE is None:
-        return {"label": "Unknown", "confidence": 0.0, "probabilities": {}}
-    out = SEVERITY_PIPELINE(text, top_k=None)
-    best_pred = max(out, key=lambda x: x["score"])
-    probs = {r["label"]: float(r["score"]) for r in out}
-    label = best_pred["label"]
-    confidence = float(best_pred["score"])
+    # Prefer remote inference if configured in severity_utils
+    result = classify_severity(text)
+    label = result.get("label", "Unknown")
+    confidence = float(result.get("confidence", 0.0))
+    probs = result.get("probabilities", {})
     # Rule-based overrides for critical signals
     text_lower = text.lower()
     severe_markers = [
@@ -222,12 +239,13 @@ def api_root():
 
 @app.get("/api/v1/summary")
 def get_summary():
-    total_reports = int(len(DF))
-    unique_symptoms_count = int(len(UNIQUE_SYMPTOMS))
-    vaccines_tracked = int(DF["VAX_NAME"].nunique()) if "VAX_NAME" in DF.columns else 0
+    df = get_df()
+    total_reports = int(len(df))
+    unique_symptoms_count = int(len(get_unique_symptoms()))
+    vaccines_tracked = int(df["VAX_NAME"].nunique()) if "VAX_NAME" in df.columns else 0
     latest_date = None
-    if not DF["RECVDATE_PARSED"].isna().all():
-        latest_date = DF["RECVDATE_PARSED"].max().strftime("%Y-%m-%d")
+    if not df["RECVDATE_PARSED"].isna().all():
+        latest_date = df["RECVDATE_PARSED"].max().strftime("%Y-%m-%d")
     return {
         "total_reports": total_reports,
         "unique_symptoms": unique_symptoms_count,
@@ -238,10 +256,11 @@ def get_summary():
 
 @app.get("/api/v1/trends")
 def get_trends(days: int = 30):
-    if "RECVDATE_PARSED" not in DF.columns or DF["RECVDATE_PARSED"].isna().all():
+    df = get_df()
+    if "RECVDATE_PARSED" not in df.columns or df["RECVDATE_PARSED"].isna().all():
         return {"dates": [], "report_counts": [], "ade_signals": []}
 
-    df = DF.dropna(subset=["RECVDATE_PARSED"]).copy()
+    df = df.dropna(subset=["RECVDATE_PARSED"]).copy()
     df["date"] = df["RECVDATE_PARSED"].dt.date
     cutoff = df["date"].max() - pd.Timedelta(days=days)
     df = df[df["date"] >= cutoff]
@@ -264,7 +283,7 @@ def get_trends(days: int = 30):
 
 @app.get("/api/v1/alerts")
 def get_alerts(limit: int = 5):
-    df = DF.copy()
+    df = get_df().copy()
     df["symptom_tokens"] = df["ALL_SYMPTOMS"].apply(_extract_symptom_tokens)
     flat = []
     for _, row in df.iterrows():
@@ -308,9 +327,10 @@ def search(symptom: str, limit: int = 20):
     if not symptom:
         raise HTTPException(status_code=400, detail="symptom query is required")
     query = symptom.lower()
-    mask = DF["SYMPTOM_TEXT"].astype(str).str.lower().str.contains(query) | \
-        DF["ALL_SYMPTOMS"].astype(str).str.lower().str.contains(query)
-    subset = DF[mask].head(limit)
+    df = get_df()
+    mask = df["SYMPTOM_TEXT"].astype(str).str.lower().str.contains(query) | \
+        df["ALL_SYMPTOMS"].astype(str).str.lower().str.contains(query)
+    subset = df[mask].head(limit)
     reports = []
     for _, row in subset.iterrows():
         reports.append({
@@ -324,7 +344,8 @@ def search(symptom: str, limit: int = 20):
 
 @app.get("/api/v1/report/{vaers_id}")
 def get_full_report(vaers_id: int):
-    row = DF.loc[DF["VAERS_ID"] == vaers_id]
+    df = get_df()
+    row = df.loc[df["VAERS_ID"] == vaers_id]
     if row.empty:
         return {
             "VAERS_ID": vaers_id,
@@ -336,9 +357,9 @@ def get_full_report(vaers_id: int):
         }
 
     text = row.iloc[0].get("SYMPTOM_TEXT", "No text")
-    gold_entry = GOLD_DATA.get(str(vaers_id), {})
+    gold_entry = get_gold_data().get(str(vaers_id), {})
     gold_entities = gold_entry.get("entities", [])
-    weak_entry = WEAK_DATA.get(str(vaers_id), {})
+    weak_entry = get_weak_data().get(str(vaers_id), {})
     weak_severity = weak_entry.get("WeakSeverity")
 
     try:
@@ -381,11 +402,11 @@ def analyze(input: TextInput):
 
 @app.get("/api/v1/insights")
 def insights():
-    return build_clinical_insights(DF)
+    return build_clinical_insights(get_df())
 
 @app.get("/api/v1/export")
 def export_reports(limit: int = 500):
-    subset = DF.head(limit).copy()
+    subset = get_df().head(limit).copy()
     csv_data = subset.to_csv(index=False)
     return Response(content=csv_data, media_type="text/csv")
 
@@ -403,7 +424,7 @@ def clusters(max_records: int = 500, min_cluster_size: int = 15, include_points:
             if cache_key in cache:
                 output = cache[cache_key]
             else:
-                output = cluster_ades(DF, max_records=max_records, min_cluster_size=min_cluster_size)
+                output = cluster_ades(get_df(), max_records=max_records, min_cluster_size=min_cluster_size)
                 cache[cache_key] = output
     if include_points != 1:
         output.pop("points", None)
@@ -416,13 +437,14 @@ def clusters(max_records: int = 500, min_cluster_size: int = 15, include_points:
 
 @app.post("/api/v1/explain/severity")
 def explain_severity(input: ExplainRequest):
-    if SEVERITY_PIPELINE is None:
+    pipeline = get_severity_pipeline()
+    if pipeline is None:
         return {"error": "Severity model not loaded"}
 
     text = input.text
     pred = _classify_severity(text)
 
-    labels = list(SEVERITY_PIPELINE.model.config.id2label.values())
+    labels = list(pipeline.model.config.id2label.values())
     pred_index = labels.index(pred.label) if pred.label in labels else 0
 
     lime_payload = None
@@ -452,7 +474,7 @@ def explain_severity(input: ExplainRequest):
         import shap
 
         use_tokenizer = os.environ.get("SHAP_USE_TOKENIZER", "0") == "1"
-        masker = shap.maskers.Text(SEVERITY_PIPELINE.tokenizer if use_tokenizer else None)
+        masker = shap.maskers.Text(pipeline.tokenizer if use_tokenizer else None)
 
         def _predict_fn(texts):
             return np.array(_predict_proba(list(texts)))

@@ -12,7 +12,14 @@ from sentence_transformers import SentenceTransformer
 from .ner_utils import extract_entities
 
 MODEL_NAME = os.environ.get("SBERT_MODEL", "sentence-transformers/all-MiniLM-L6-v2")
-EMBEDDER = SentenceTransformer(MODEL_NAME)
+_EMBEDDER = None
+
+
+def _get_embedder():
+    global _EMBEDDER
+    if _EMBEDDER is None:
+        _EMBEDDER = SentenceTransformer(MODEL_NAME)
+    return _EMBEDDER
 
 ADE_LABELS = {"ADE", "ADR", "ADVERSE_EVENT"}
 
@@ -110,7 +117,8 @@ def _cluster_group(records: List[Dict[str, object]], min_cluster_size: int) -> T
     if not texts:
         return [], []
 
-    embeddings = EMBEDDER.encode(
+    embedder = _get_embedder()
+    embeddings = embedder.encode(
         texts,
         show_progress_bar=False,
         normalize_embeddings=True,

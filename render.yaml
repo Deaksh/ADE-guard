@@ -16,10 +16,14 @@ services:
         value: "1"
       - key: SHAP_USE_TOKENIZER
         value: "0"
+      - key: USE_HF_INFERENCE
+        value: "1"
       - key: NER_MODEL_PATH
         value: "Deaksh/ADE-Guard-NER"
       - key: SEVERITY_MODEL
         value: "Deaksh/ADE-Guard"
+      - key: HF_API_TOKEN
+        sync: false
       - key: HF_HOME
         value: "/var/data/hf"
       - key: HUGGINGFACE_HUB_CACHE

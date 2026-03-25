@@ -1,5 +1,7 @@
 import os
 from functools import lru_cache
+from typing import List, Dict, Any
+import requests
 from transformers import pipeline
 from dotenv import load_dotenv
 
@@ -8,6 +10,9 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 load_dotenv(os.path.join(BASE_DIR, ".env"))
 DEFAULT_DIR = os.path.join(BASE_DIR, "models", "ner_biobert_output")
 ENV_PATH = os.environ.get("NER_MODEL_PATH")
+USE_HF_INFERENCE = os.environ.get("USE_HF_INFERENCE", "0") == "1" or \
+    os.environ.get("NER_INFERENCE", "").lower() in {"hf", "1", "true"}
+HF_API_TOKEN = os.environ.get("HF_API_TOKEN") or os.environ.get("HUGGINGFACEHUB_API_TOKEN")
 
 
 def _resolve_model_path() -> str:
@@ -36,16 +41,58 @@ def _resolve_model_path() -> str:
 
 
 MODEL_PATH = _resolve_model_path()
-ner_pipeline = pipeline(
-    "ner",
-    model=MODEL_PATH,
-    tokenizer=MODEL_PATH,
-    aggregation_strategy="simple",
-)
+
+
+@lru_cache(maxsize=1)
+def _get_pipeline():
+    return pipeline(
+        "ner",
+        model=MODEL_PATH,
+        tokenizer=MODEL_PATH,
+        aggregation_strategy="simple",
+    )
+
+
+def _hf_ner(text: str) -> List[Dict[str, Any]]:
+    if not HF_API_TOKEN:
+        raise RuntimeError("HF_API_TOKEN is required for Hugging Face inference.")
+    url = f"https://api-inference.huggingface.co/models/{MODEL_PATH}"
+    headers = {"Authorization": f"Bearer {HF_API_TOKEN}"}
+    payload = {"inputs": text, "options": {"wait_for_model": True}}
+    resp = requests.post(url, headers=headers, json=payload, timeout=60)
+    resp.raise_for_status()
+    data = resp.json()
+    if isinstance(data, dict) and data.get("error"):
+        raise RuntimeError(data["error"])
+    if not isinstance(data, list):
+        return []
+    entities = []
+    stopwords = {
+        "and", "or", "the", "a", "an", "to", "of", "in", "after", "for", "on", "at", "with",
+        "without", "from", "by", "as", "is", "was", "were", "be", "been", "being",
+        "developed", "received", "took", "taking", "reported", "patient", "pt"
+    }
+    for r in data:
+        word = r.get("word") or r.get("entity") or ""
+        word = word.replace("##", "") if word.startswith("##") else word
+        cleaned = word.strip()
+        if len(cleaned) < 3 or cleaned.lower() in stopwords:
+            continue
+        entities.append({
+            "text": cleaned,
+            "label": r.get("entity_group") or r.get("entity") or "ADE",
+            "start": r.get("start", 0),
+            "end": r.get("end", 0),
+            "score": float(r.get("score", 0.0)),
+        })
+    return entities
 
 
 @lru_cache(maxsize=1024)
 def _extract_entities_cached(text: str):
+    if USE_HF_INFERENCE:
+        return _hf_ner(text)
+    ner_pipeline = _get_pipeline()
     # Older pipeline versions don't accept truncation params; do manual truncation.
     tokens = ner_pipeline.tokenizer(
         text,
@@ -59,7 +106,8 @@ def _extract_entities_cached(text: str):
     results = ner_pipeline(truncated_text)
     entities = []
     stopwords = {"and", "or", "the", "a", "an", "to", "of", "in", "after", "for", "on", "at", "with",
-                 "without", "from", "by", "as", "is", "was", "were", "be", "been", "being"}
+                 "without", "from", "by", "as", "is", "was", "were", "be", "been", "being",
+                 "developed", "received", "took", "taking", "reported", "patient", "pt"}
     for r in results:
         word = r["word"].replace("##", "") if r["word"].startswith("##") else r["word"]
         cleaned = word.strip()
