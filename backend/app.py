@@ -43,15 +43,21 @@ MERGED_COVID_PATH = os.path.join(DATA_DIR, "merged_covid_2025.csv")
 app = FastAPI(title="ADEGuard API")
 CLUSTER_LOCK = threading.Lock()
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=[
+origins_env = os.environ.get("FRONTEND_ORIGINS", "")
+if origins_env.strip():
+    allow_origins = [o.strip() for o in origins_env.split(",") if o.strip()]
+else:
+    allow_origins = [
         "http://localhost:3000",
         "http://127.0.0.1:3000",
         "http://localhost:3100",
         "http://127.0.0.1:3100",
         "http://localhost:5173",
-    ],
+    ]
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=allow_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
