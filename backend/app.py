@@ -18,7 +18,7 @@ from pydantic import BaseModel
 
 from backend.ade_pipeline import extract_ade_with_severity
 from backend.clustering_utils import cluster_ades
-from backend.data_preparation import load_and_merge_vaers
+from backend.data_preparation import load_and_merge_vaers, load_and_merge_vaers_year
 from backend.ner_utils import extract_entities
 from backend.severity_utils import load_classifier, classify_severity
 from dotenv import load_dotenv
@@ -31,7 +31,9 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 load_dotenv(os.path.join(BASE_DIR, ".env"))
 os.environ.setdefault("NUMBA_THREADING_LAYER", "workqueue")
 os.environ.setdefault("NUMBA_NUM_THREADS", "1")
+REPO_DIR = os.path.dirname(BASE_DIR)
 DATA_DIR = os.path.join(BASE_DIR, "data")
+VAERS_DATA_ROOT = os.environ.get("VAERS_DATA_ROOT") or os.path.join(REPO_DIR, "Input_files", "data")
 GOLD_PATH = os.path.join(DATA_DIR, "gold_data.json")
 GOLD_COVID_PATH = os.path.join(DATA_DIR, "gold_data_covid.json")
 WEAK_PATH = os.path.join(DATA_DIR, "weak_labels.json")
@@ -150,14 +152,51 @@ def get_weak_data():
     return _load_weak_data()
 
 
-@lru_cache(maxsize=1)
-def get_df():
-    return _load_dataset()
+@lru_cache(maxsize=8)
+def get_df(year: int | None = None):
+    if year is None:
+        return _load_dataset()
+    return _load_dataset_year(year)
 
 
-@lru_cache(maxsize=1)
-def get_unique_symptoms():
-    df = get_df()
+def _load_dataset_year(year: int) -> pd.DataFrame:
+    covid_only = os.environ.get("COVID_ONLY", "0") == "1"
+    output_dir = os.path.join(DATA_DIR, "year_cache")
+    os.makedirs(output_dir, exist_ok=True)
+    cached_path = os.path.join(output_dir, f"merged_{year}.csv")
+    if os.path.exists(cached_path):
+        df = pd.read_csv(cached_path, low_memory=False)
+    else:
+        df = load_and_merge_vaers_year(year, data_root=VAERS_DATA_ROOT, output_dir=output_dir, covid_only=covid_only)
+
+    df.columns = [c.strip() for c in df.columns]
+    if "RECVDATE" in df.columns:
+        df["RECVDATE_PARSED"] = pd.to_datetime(df["RECVDATE"], errors="coerce")
+    else:
+        df["RECVDATE_PARSED"] = pd.NaT
+    for col in ["ALL_SYMPTOMS", "SYMPTOM_TEXT", "VAX_NAME", "DIED", "HOSPITAL"]:
+        if col not in df.columns:
+            df[col] = ""
+        df[col] = df[col].fillna("")
+    return df
+
+
+def _available_years() -> List[int]:
+    if not os.path.isdir(VAERS_DATA_ROOT):
+        return []
+    years = []
+    for name in os.listdir(VAERS_DATA_ROOT):
+        if name.endswith("VAERSData.zip"):
+            try:
+                years.append(int(name[:4]))
+            except Exception:
+                continue
+    return sorted(set(years))
+
+
+@lru_cache(maxsize=8)
+def get_unique_symptoms(year: int | None = None):
+    df = get_df(year)
     unique = set()
     for v in df["ALL_SYMPTOMS"].dropna():
         for token in _extract_symptom_tokens(v):
@@ -247,11 +286,16 @@ def api_root():
     }
 
 
+@app.get("/api/v1/years")
+def get_years():
+    return {"years": _available_years()}
+
+
 @app.get("/api/v1/summary")
-def get_summary():
-    df = get_df()
+def get_summary(year: int | None = None):
+    df = get_df(year)
     total_reports = int(len(df))
-    unique_symptoms_count = int(len(get_unique_symptoms()))
+    unique_symptoms_count = int(len(get_unique_symptoms(year)))
     vaccines_tracked = int(df["VAX_NAME"].nunique()) if "VAX_NAME" in df.columns else 0
     latest_date = None
     if not df["RECVDATE_PARSED"].isna().all():
@@ -265,8 +309,8 @@ def get_summary():
 
 
 @app.get("/api/v1/trends")
-def get_trends(days: int = 30):
-    df = get_df()
+def get_trends(days: int = 30, year: int | None = None):
+    df = get_df(year)
     if "RECVDATE_PARSED" not in df.columns or df["RECVDATE_PARSED"].isna().all():
         return {"dates": [], "report_counts": [], "ade_signals": []}
 
@@ -292,8 +336,8 @@ def get_trends(days: int = 30):
 
 
 @app.get("/api/v1/alerts")
-def get_alerts(limit: int = 5):
-    df = get_df().copy()
+def get_alerts(limit: int = 5, year: int | None = None):
+    df = get_df(year).copy()
     df["symptom_tokens"] = df["ALL_SYMPTOMS"].apply(_extract_symptom_tokens)
     flat = []
     for _, row in df.iterrows():
@@ -333,11 +377,11 @@ def get_alerts(limit: int = 5):
 
 
 @app.get("/api/v1/search")
-def search(symptom: str, limit: int = 20):
+def search(symptom: str, limit: int = 20, year: int | None = None):
     if not symptom:
         raise HTTPException(status_code=400, detail="symptom query is required")
     query = symptom.lower()
-    df = get_df()
+    df = get_df(year)
     mask = df["SYMPTOM_TEXT"].astype(str).str.lower().str.contains(query) | \
         df["ALL_SYMPTOMS"].astype(str).str.lower().str.contains(query)
     subset = df[mask].head(limit)
@@ -353,8 +397,8 @@ def search(symptom: str, limit: int = 20):
 
 
 @app.get("/api/v1/report/{vaers_id}")
-def get_full_report(vaers_id: int):
-    df = get_df()
+def get_full_report(vaers_id: int, year: int | None = None):
+    df = get_df(year)
     row = df.loc[df["VAERS_ID"] == vaers_id]
     if row.empty:
         return {
@@ -411,17 +455,17 @@ def analyze(input: TextInput):
 
 
 @app.get("/api/v1/insights")
-def insights():
-    return build_clinical_insights(get_df())
+def insights(year: int | None = None):
+    return build_clinical_insights(get_df(year))
 
 @app.get("/api/v1/export")
-def export_reports(limit: int = 500):
-    subset = get_df().head(limit).copy()
+def export_reports(limit: int = 500, year: int | None = None):
+    subset = get_df(year).head(limit).copy()
     csv_data = subset.to_csv(index=False)
     return Response(content=csv_data, media_type="text/csv")
 
 @app.get("/api/v1/clusters")
-def clusters(max_records: int = 500, min_cluster_size: int = 15, include_points: int = 1):
+def clusters(max_records: int = 500, min_cluster_size: int = 15, include_points: int = 1, year: int | None = None):
     cache_key = (max_records, min_cluster_size)
     if not hasattr(clusters, "_cache"):
         clusters._cache = {}
@@ -434,7 +478,7 @@ def clusters(max_records: int = 500, min_cluster_size: int = 15, include_points:
             if cache_key in cache:
                 output = cache[cache_key]
             else:
-                output = cluster_ades(get_df(), max_records=max_records, min_cluster_size=min_cluster_size)
+                output = cluster_ades(get_df(year), max_records=max_records, min_cluster_size=min_cluster_size)
                 cache[cache_key] = output
     if include_points != 1:
         output.pop("points", None)

@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import axios from "axios";
 import ClusterScatter from "./ClusterScatter";
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE || "http://localhost:8100";
@@ -40,23 +40,47 @@ export default function AdeDashboard() {
   const [explainLoading, setExplainLoading] = useState(false);
   const [insights, setInsights] = useState<Insight | null>(null);
   const [loading, setLoading] = useState(false);
+  const [years, setYears] = useState<number[]>([]);
+  const [year, setYear] = useState<number | "all">("all");
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    const fetchYears = async () => {
+      try {
+        const res = await axios.get(`${API_BASE}/api/v1/years`);
+        const list = (res.data?.years || []).filter((y: any) => Number.isFinite(y));
+        setYears(list);
+        if (list.length) {
+          setYear(list[list.length - 1]);
+        }
+      } catch (err: any) {
+        setError("API is not reachable. Set NEXT_PUBLIC_API_BASE to the backend URL.");
+      }
+    };
+    fetchYears();
+  }, []);
 
   const highlighted = useMemo(() => buildSegments(text, entities), [text, entities]);
 
   const handleAnalyze = async () => {
     setLoading(true);
+    setError(null);
     try {
       const [nerRes, sevRes, analyzeRes, insightsRes] = await Promise.all([
         axios.post(`${API_BASE}/api/v1/ner`, { text }),
         axios.post(`${API_BASE}/api/v1/severity`, { text }),
         axios.post(`${API_BASE}/api/v1/analyze`, { text }),
-        axios.get(`${API_BASE}/api/v1/insights`),
+        axios.get(`${API_BASE}/api/v1/insights`, {
+          params: year === "all" ? {} : { year },
+        }),
       ]);
       setEntities(nerRes.data.entities || []);
       setSeverity(sevRes.data);
       setAnalysis(analyzeRes.data.results || []);
-      
+
       setInsights(insightsRes.data || null);
+    } catch (err: any) {
+      setError(err?.response?.data?.detail || "Failed to reach backend. Check API base URL.");
     } finally {
       setLoading(false);
     }
@@ -66,23 +90,37 @@ export default function AdeDashboard() {
 
   const handleExplain = async () => {
     setExplainLoading(true);
+    setError(null);
     try {
       const res = await axios.post(`${API_BASE}/api/v1/explain/severity`, { text });
       setExplain(res.data || null);
+    } catch (err: any) {
+      setError(err?.response?.data?.detail || "Explainability request failed.");
     } finally {
       setExplainLoading(false);
     }
   };
 
   const handleClusters = async () => {
-    const res = await axios.get(
-      `${API_BASE}/api/v1/clusters?max_records=500&min_cluster_size=15&include_points=1`
-    );
-    setClusters(res.data);
+    setError(null);
+    try {
+      const res = await axios.get(`${API_BASE}/api/v1/clusters`, {
+        params: {
+          max_records: 500,
+          min_cluster_size: 15,
+          include_points: 1,
+          ...(year === "all" ? {} : { year }),
+        },
+      });
+      setClusters(res.data);
+    } catch (err: any) {
+      setError(err?.response?.data?.detail || "Cluster request failed.");
+    }
   };
 
   const handleDownload = () => {
-    window.open(`${API_BASE}/api/v1/export?limit=500`, "_blank");
+    const qs = year === "all" ? "limit=500" : `limit=500&year=${year}`;
+    window.open(`${API_BASE}/api/v1/export?${qs}`, "_blank");
   };
 
   return (
@@ -99,7 +137,32 @@ export default function AdeDashboard() {
             Detect adverse drug events, cluster symptom variants across ages, and
             interpret severity signals with explainable AI.
           </p>
+          <div className="flex flex-wrap items-center gap-3">
+            <div className="text-xs text-slate">Data Year</div>
+            <select
+              className="rounded-full border border-slate/20 bg-white/80 px-3 py-1 text-xs"
+              value={year}
+              onChange={(e) => {
+                const val = e.target.value;
+                setYear(val === "all" ? "all" : Number(val));
+              }}
+            >
+              <option value="all">All years</option>
+              {years.map((y) => (
+                <option key={y} value={y}>{y}</option>
+              ))}
+            </select>
+            {years.length === 0 && (
+              <span className="text-xs text-slate">No local year zips detected.</span>
+            )}
+          </div>
         </header>
+
+        {error && (
+          <div className="rounded-2xl border border-coral/40 bg-coral/10 px-4 py-3 text-sm text-ink">
+            {error}
+          </div>
+        )}
 
         <section className="grid md:grid-cols-[1.2fr_0.8fr] gap-6">
           <div className="card p-6 space-y-4">
