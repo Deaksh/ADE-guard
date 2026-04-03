@@ -33,7 +33,11 @@ os.environ.setdefault("NUMBA_THREADING_LAYER", "workqueue")
 os.environ.setdefault("NUMBA_NUM_THREADS", "1")
 REPO_DIR = os.path.dirname(BASE_DIR)
 DATA_DIR = os.path.join(BASE_DIR, "data")
-VAERS_DATA_ROOT = os.environ.get("VAERS_DATA_ROOT") or os.path.join(REPO_DIR, "Input_files", "data")
+DEFAULT_VAERS_ROOT = os.path.join(REPO_DIR, "data", "vaers")
+FALLBACK_VAERS_ROOT = os.path.join(REPO_DIR, "Input_files", "data")
+VAERS_DATA_ROOT = os.environ.get("VAERS_DATA_ROOT") or (
+    DEFAULT_VAERS_ROOT if os.path.isdir(DEFAULT_VAERS_ROOT) else FALLBACK_VAERS_ROOT
+)
 GOLD_PATH = os.path.join(DATA_DIR, "gold_data.json")
 GOLD_COVID_PATH = os.path.join(DATA_DIR, "gold_data_covid.json")
 WEAK_PATH = os.path.join(DATA_DIR, "weak_labels.json")
