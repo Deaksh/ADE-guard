@@ -48,6 +48,7 @@ app = FastAPI(title="ADEGuard API")
 CLUSTER_LOCK = threading.Lock()
 
 origins_env = os.environ.get("FRONTEND_ORIGINS", "").strip()
+origin_regex = os.environ.get("FRONTEND_ORIGIN_REGEX", "").strip()
 if origins_env == "*":
     allow_origins = ["*"]
     allow_credentials = False
@@ -63,6 +64,8 @@ else:
         "http://localhost:5173",
     ]
     allow_credentials = True
+    if not origin_regex:
+        origin_regex = r"https://.*\\.vercel\\.app"
 
 app.add_middleware(
     CORSMiddleware,
@@ -70,6 +73,7 @@ app.add_middleware(
     allow_credentials=allow_credentials,
     allow_methods=["*"],
     allow_headers=["*"],
+    allow_origin_regex=origin_regex or None,
 )
 
 
