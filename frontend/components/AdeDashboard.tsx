@@ -39,6 +39,7 @@ export default function AdeDashboard() {
   const [clusters, setClusters] = useState<any>(null);
   const [explainLoading, setExplainLoading] = useState(false);
   const [insights, setInsights] = useState<Insight | null>(null);
+  const [insightsLoading, setInsightsLoading] = useState(false);
   const [loading, setLoading] = useState(false);
   const [years, setYears] = useState<number[]>([]);
   const [year, setYear] = useState<number | "all">("all");
@@ -66,19 +67,14 @@ export default function AdeDashboard() {
     setLoading(true);
     setError(null);
     try {
-      const [nerRes, sevRes, analyzeRes, insightsRes] = await Promise.all([
+      const [nerRes, sevRes, analyzeRes] = await Promise.all([
         axios.post(`${API_BASE}/api/v1/ner`, { text }),
         axios.post(`${API_BASE}/api/v1/severity`, { text }),
         axios.post(`${API_BASE}/api/v1/analyze`, { text }),
-        axios.get(`${API_BASE}/api/v1/insights`, {
-          params: year === "all" ? {} : { year },
-        }),
       ]);
       setEntities(nerRes.data.entities || []);
       setSeverity(sevRes.data);
       setAnalysis(analyzeRes.data.results || []);
-
-      setInsights(insightsRes.data || null);
     } catch (err: any) {
       setError(err?.response?.data?.detail || "Failed to reach backend. Check API base URL.");
     } finally {
@@ -98,6 +94,21 @@ export default function AdeDashboard() {
       setError(err?.response?.data?.detail || "Explainability request failed.");
     } finally {
       setExplainLoading(false);
+    }
+  };
+
+  const handleInsights = async () => {
+    setInsightsLoading(true);
+    setError(null);
+    try {
+      const res = await axios.get(`${API_BASE}/api/v1/insights`, {
+        params: year === "all" ? {} : { year },
+      });
+      setInsights(res.data || null);
+    } catch (err: any) {
+      setError(err?.response?.data?.detail || "Insights request failed.");
+    } finally {
+      setInsightsLoading(false);
     }
   };
 
@@ -263,12 +274,21 @@ export default function AdeDashboard() {
                 <h2 className="font-display text-xl">Clinical Insights</h2>
                 <p className="text-sm text-slate">Snapshot summaries for safety teams.</p>
               </div>
-              <button
-                className="px-3 py-1.5 rounded-full bg-sea text-white text-xs font-semibold"
-                onClick={handleDownload}
-              >
-                Download CSV
-              </button>
+              <div className="flex items-center gap-2">
+                <button
+                  className="px-3 py-1.5 rounded-full bg-ink text-sand text-xs font-semibold"
+                  onClick={handleInsights}
+                  disabled={insightsLoading}
+                >
+                  {insightsLoading ? "Loading..." : "Load Insights"}
+                </button>
+                <button
+                  className="px-3 py-1.5 rounded-full bg-sea text-white text-xs font-semibold"
+                  onClick={handleDownload}
+                >
+                  Download CSV
+                </button>
+              </div>
             </div>
             {insights ? (
               <div className="space-y-3 text-sm">
