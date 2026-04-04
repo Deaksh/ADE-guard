@@ -485,6 +485,11 @@ def export_reports(limit: int = 500, year: int | None = None):
 
 @app.get("/api/v1/clusters")
 def clusters(max_records: int = 500, min_cluster_size: int = 15, include_points: int = 1, year: int | None = None):
+    if os.environ.get("DISABLE_CLUSTERS", "0") == "1":
+        return {"error": "Clusters disabled in low-memory mode."}
+    env_max = os.environ.get("CLUSTER_MAX_RECORDS")
+    if env_max and env_max.isdigit():
+        max_records = min(max_records, int(env_max))
     cache_key = (max_records, min_cluster_size)
     if not hasattr(clusters, "_cache"):
         clusters._cache = {}

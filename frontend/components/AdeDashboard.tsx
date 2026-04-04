@@ -123,6 +123,10 @@ export default function AdeDashboard() {
           ...(year === "all" ? {} : { year }),
         },
       });
+      if (res.data?.error) {
+        setError(res.data.error);
+        return;
+      }
       setClusters(res.data);
     } catch (err: any) {
       setError(err?.response?.data?.detail || "Cluster request failed.");
