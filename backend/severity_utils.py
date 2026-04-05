@@ -7,6 +7,7 @@ MODEL_ID = os.environ.get("SEVERITY_MODEL") or DEFAULT_LOCAL_MODEL
 USE_HF_INFERENCE = os.environ.get("USE_HF_INFERENCE", "0") == "1" or \
     os.environ.get("SEVERITY_INFERENCE", "").lower() in {"hf", "1", "true"}
 HF_API_TOKEN = os.environ.get("HF_API_TOKEN") or os.environ.get("HUGGINGFACEHUB_API_TOKEN")
+HF_API_TIMEOUT = int(os.environ.get("HF_API_TIMEOUT", "20"))
 
 # Ensure HF cache is writable when pulling from hub
 DEFAULT_CACHE = os.path.join(BASE, ".hf_cache")
@@ -67,7 +68,7 @@ def classify_severity_remote(text: str):
     url = f"https://api-inference.huggingface.co/models/{MODEL_ID}"
     headers = {"Authorization": f"Bearer {HF_API_TOKEN}"}
     payload = {"inputs": text, "options": {"wait_for_model": True}}
-    resp = requests.post(url, headers=headers, json=payload, timeout=60)
+    resp = requests.post(url, headers=headers, json=payload, timeout=HF_API_TIMEOUT)
     resp.raise_for_status()
     data = resp.json()
     if isinstance(data, dict) and data.get("error"):

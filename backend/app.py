@@ -458,12 +458,15 @@ def ner_extract(input: TextInput):
     try:
         return {"entities": extract_entities(input.text)}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=503, detail=f"NER inference failed: {e}")
 
 
 @app.post("/api/v1/severity", response_model=SeverityResponse)
 def severity(input: TextInput):
-    return _classify_severity(input.text)
+    try:
+        return _classify_severity(input.text)
+    except Exception as e:
+        raise HTTPException(status_code=503, detail=f"Severity inference failed: {e}")
 
 
 @app.post("/api/v1/analyze")

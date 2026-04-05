@@ -12,6 +12,7 @@ ENV_PATH = os.environ.get("NER_MODEL_PATH")
 USE_HF_INFERENCE = os.environ.get("USE_HF_INFERENCE", "0") == "1" or \
     os.environ.get("NER_INFERENCE", "").lower() in {"hf", "1", "true"}
 HF_API_TOKEN = os.environ.get("HF_API_TOKEN") or os.environ.get("HUGGINGFACEHUB_API_TOKEN")
+HF_API_TIMEOUT = int(os.environ.get("HF_API_TIMEOUT", "20"))
 
 
 def _resolve_model_path() -> str:
@@ -59,7 +60,7 @@ def _hf_ner(text: str) -> List[Dict[str, Any]]:
     url = f"https://api-inference.huggingface.co/models/{MODEL_PATH}"
     headers = {"Authorization": f"Bearer {HF_API_TOKEN}"}
     payload = {"inputs": text, "options": {"wait_for_model": True}}
-    resp = requests.post(url, headers=headers, json=payload, timeout=60)
+    resp = requests.post(url, headers=headers, json=payload, timeout=HF_API_TIMEOUT)
     resp.raise_for_status()
     data = resp.json()
     if isinstance(data, dict) and data.get("error"):
