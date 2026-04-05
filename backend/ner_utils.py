@@ -13,6 +13,7 @@ USE_HF_INFERENCE = os.environ.get("USE_HF_INFERENCE", "0") == "1" or \
     os.environ.get("NER_INFERENCE", "").lower() in {"hf", "1", "true"}
 HF_API_TOKEN = os.environ.get("HF_API_TOKEN") or os.environ.get("HUGGINGFACEHUB_API_TOKEN")
 HF_API_TIMEOUT = int(os.environ.get("HF_API_TIMEOUT", "20"))
+HF_FALLBACK_MODEL = os.environ.get("NER_FALLBACK_MODEL", "dslim/bert-base-NER")
 
 
 def _resolve_model_path() -> str:
@@ -54,10 +55,10 @@ def _get_pipeline():
     )
 
 
-def _hf_ner(text: str) -> List[Dict[str, Any]]:
+def _hf_ner_with_model(text: str, model_id: str) -> List[Dict[str, Any]]:
     if not HF_API_TOKEN:
         raise RuntimeError("HF_API_TOKEN is required for Hugging Face inference.")
-    url = f"https://api-inference.huggingface.co/models/{MODEL_PATH}"
+    url = f"https://api-inference.huggingface.co/models/{model_id}"
     headers = {"Authorization": f"Bearer {HF_API_TOKEN}"}
     payload = {"inputs": text, "options": {"wait_for_model": True}}
     resp = requests.post(url, headers=headers, json=payload, timeout=HF_API_TIMEOUT)
@@ -87,6 +88,16 @@ def _hf_ner(text: str) -> List[Dict[str, Any]]:
             "score": float(r.get("score", 0.0)),
         })
     return entities
+
+
+def _hf_ner(text: str) -> List[Dict[str, Any]]:
+    try:
+        return _hf_ner_with_model(text, MODEL_PATH)
+    except requests.HTTPError as e:
+        status = getattr(e.response, "status_code", None)
+        if HF_FALLBACK_MODEL and HF_FALLBACK_MODEL != MODEL_PATH and status in (404, 410):
+            return _hf_ner_with_model(text, HF_FALLBACK_MODEL)
+        raise
 
 
 @lru_cache(maxsize=1024)

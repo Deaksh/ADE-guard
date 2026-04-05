@@ -8,6 +8,7 @@ USE_HF_INFERENCE = os.environ.get("USE_HF_INFERENCE", "0") == "1" or \
     os.environ.get("SEVERITY_INFERENCE", "").lower() in {"hf", "1", "true"}
 HF_API_TOKEN = os.environ.get("HF_API_TOKEN") or os.environ.get("HUGGINGFACEHUB_API_TOKEN")
 HF_API_TIMEOUT = int(os.environ.get("HF_API_TIMEOUT", "20"))
+HF_FALLBACK_MODEL = os.environ.get("SEVERITY_FALLBACK_MODEL", "")
 
 # Ensure HF cache is writable when pulling from hub
 DEFAULT_CACHE = os.path.join(BASE, ".hf_cache")
@@ -62,10 +63,10 @@ def classify_severity_local(text: str):
     return label, score
 
 
-def classify_severity_remote(text: str):
+def classify_severity_remote(text: str, model_id: str = MODEL_ID):
     if not HF_API_TOKEN:
         raise RuntimeError("HF_API_TOKEN is required for Hugging Face inference.")
-    url = f"https://api-inference.huggingface.co/models/{MODEL_ID}"
+    url = f"https://api-inference.huggingface.co/models/{model_id}"
     headers = {"Authorization": f"Bearer {HF_API_TOKEN}"}
     payload = {"inputs": text, "options": {"wait_for_model": True}}
     resp = requests.post(url, headers=headers, json=payload, timeout=HF_API_TIMEOUT)
@@ -86,7 +87,16 @@ def classify_severity_remote(text: str):
 
 def classify_severity(text: str):
     if USE_HF_INFERENCE:
-        return classify_severity_remote(text)
+        try:
+            return classify_severity_remote(text)
+        except requests.HTTPError as e:
+            status = getattr(e.response, "status_code", None)
+            if HF_FALLBACK_MODEL and status in (404, 410):
+                return classify_severity_remote(text, model_id=HF_FALLBACK_MODEL)
+            # fallback to rules-only when HF is unavailable
+            return {"label": "Unknown", "confidence": 0.0, "probabilities": {}}
+        except Exception:
+            return {"label": "Unknown", "confidence": 0.0, "probabilities": {}}
     clf = load_classifier()
     if clf is None:
         return {"label": "Unknown", "confidence": 0.0, "probabilities": {}}
