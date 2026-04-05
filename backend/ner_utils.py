@@ -140,25 +140,47 @@ def _simple_ner(text: str) -> List[Dict[str, Any]]:
 
     # Vaccine/drug extraction
     for term in VACCINE_TERMS:
-        for m in re.finditer(rf"\\b{re.escape(term)}\\b", lower):
-            entities.append({
-                "text": text[m.start():m.end()],
-                "label": "DRUG",
-                "start": m.start(),
-                "end": m.end(),
-                "score": 0.45,
-            })
+        if " " in term:
+            idx = lower.find(term)
+            if idx != -1:
+                entities.append({
+                    "text": text[idx:idx + len(term)],
+                    "label": "DRUG",
+                    "start": idx,
+                    "end": idx + len(term),
+                    "score": 0.45,
+                })
+        else:
+            for m in re.finditer(rf"\\b{re.escape(term)}\\b", lower):
+                entities.append({
+                    "text": text[m.start():m.end()],
+                    "label": "DRUG",
+                    "start": m.start(),
+                    "end": m.end(),
+                    "score": 0.45,
+                })
 
     # ADE extraction
     for term in ADE_TERMS:
-        for m in re.finditer(rf"\\b{re.escape(term)}\\b", lower):
-            entities.append({
-                "text": text[m.start():m.end()],
-                "label": "ADE",
-                "start": m.start(),
-                "end": m.end(),
-                "score": 0.4,
-            })
+        if " " in term:
+            idx = lower.find(term)
+            if idx != -1:
+                entities.append({
+                    "text": text[idx:idx + len(term)],
+                    "label": "ADE",
+                    "start": idx,
+                    "end": idx + len(term),
+                    "score": 0.4,
+                })
+        else:
+            for m in re.finditer(rf"\\b{re.escape(term)}\\b", lower):
+                entities.append({
+                    "text": text[m.start():m.end()],
+                    "label": "ADE",
+                    "start": m.start(),
+                    "end": m.end(),
+                    "score": 0.4,
+                })
 
     return entities
 
