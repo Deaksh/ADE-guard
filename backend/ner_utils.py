@@ -15,6 +15,17 @@ HF_API_TOKEN = os.environ.get("HF_API_TOKEN") or os.environ.get("HUGGINGFACEHUB_
 HF_API_TIMEOUT = int(os.environ.get("HF_API_TIMEOUT", "20"))
 HF_FALLBACK_MODEL = os.environ.get("NER_FALLBACK_MODEL", "dslim/bert-base-NER")
 
+VACCINE_TERMS = [
+    "pfizer", "biontech", "moderna", "janssen", "novavax", "covid-19 vaccine",
+    "covid vaccine", "covid19 vaccine", "mrna vaccine", "mrna-1273", "bnt162b2"
+]
+ADE_TERMS = [
+    "pain", "chest pain", "headache", "dizziness", "nausea", "vomiting",
+    "fever", "pyrexia", "rash", "swelling", "fatigue", "myalgia",
+    "shortness of breath", "dyspnea", "anaphylaxis", "chills",
+    "syncope", "fainting", "palpitations", "myocarditis", "pericarditis"
+]
+
 
 def _resolve_model_path() -> str:
     candidates = []
@@ -97,7 +108,55 @@ def _hf_ner(text: str) -> List[Dict[str, Any]]:
         status = getattr(e.response, "status_code", None)
         if HF_FALLBACK_MODEL and HF_FALLBACK_MODEL != MODEL_PATH and status in (404, 410):
             return _hf_ner_with_model(text, HF_FALLBACK_MODEL)
-        raise
+        return _simple_ner(text)
+    except Exception:
+        return _simple_ner(text)
+
+
+def _simple_ner(text: str) -> List[Dict[str, Any]]:
+    entities: List[Dict[str, Any]] = []
+    if not text:
+        return entities
+    lower = text.lower()
+
+    # Age extraction
+    age_patterns = [
+        r"\b(\d{1,3})\s*-\s*year\s*-?\s*old\b",
+        r"\b(\d{1,3})\s*(?:yo|y/o|years?\s*old)\b",
+    ]
+    for pat in age_patterns:
+        for m in re.finditer(pat, lower):
+            entities.append({
+                "text": text[m.start():m.end()],
+                "label": "AGE",
+                "start": m.start(),
+                "end": m.end(),
+                "score": 0.4,
+            })
+
+    # Vaccine/drug extraction
+    for term in VACCINE_TERMS:
+        for m in re.finditer(rf"\\b{re.escape(term)}\\b", lower):
+            entities.append({
+                "text": text[m.start():m.end()],
+                "label": "DRUG",
+                "start": m.start(),
+                "end": m.end(),
+                "score": 0.45,
+            })
+
+    # ADE extraction
+    for term in ADE_TERMS:
+        for m in re.finditer(rf"\\b{re.escape(term)}\\b", lower):
+            entities.append({
+                "text": text[m.start():m.end()],
+                "label": "ADE",
+                "start": m.start(),
+                "end": m.end(),
+                "score": 0.4,
+            })
+
+    return entities
 
 
 @lru_cache(maxsize=1024)
