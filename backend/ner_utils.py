@@ -107,7 +107,10 @@ def _hf_ner(text: str) -> List[Dict[str, Any]]:
     except requests.HTTPError as e:
         status = getattr(e.response, "status_code", None)
         if HF_FALLBACK_MODEL and HF_FALLBACK_MODEL != MODEL_PATH and status in (404, 410):
-            return _hf_ner_with_model(text, HF_FALLBACK_MODEL)
+            try:
+                return _hf_ner_with_model(text, HF_FALLBACK_MODEL)
+            except Exception:
+                return _simple_ner(text)
         return _simple_ner(text)
     except Exception:
         return _simple_ner(text)
